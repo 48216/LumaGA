@@ -229,18 +229,34 @@ jobs:
           echo "=== 应用 ==="
           git apply --verbose LumaGA-reading-progress.patch
 
-          echo "=== 改动清单 ==="
-          git status --short
-          NEW=$(git status --short | grep -c '^??' || true)
-          MOD=$(git status --short | grep -c '^ M' || true)
-          echo "新增 $NEW 个（期望 4），修改 $MOD 个（期望 7）"
-          if [ "$NEW" != "4" ] || [ "$MOD" != "7" ]; then
-            echo "::error title=改动数量不符::预期 4 新 + 7 改，实际 $NEW 新 + $MOD 改"
+          echo "=== 改动清单（--untracked-files=all：不折叠新目录）==="
+          git status --short --untracked-files=all | tee /tmp/status.txt
+
+          # A porcelain file line starts with '??' or with a status column + space.
+          # Counting with a single pass avoids grep -c also counting blank/echo lines.
+          # The patch file itself is excluded: the decode step overwrites it in place,
+          # and counting it is what made an earlier revision fail on a good patch.
+          NEW=$(grep -c '^?? ' /tmp/status.txt || true)
+          MOD_SRC=$(grep -v 'LumaGA-reading-progress\.patch' /tmp/status.txt \
+            | grep -cE '^ [MADRC] ' || true)
+          MOD_SELF=$(grep -c 'LumaGA-reading-progress\.patch' /tmp/status.txt || true)
+          echo "新文件    : $NEW       (期望 4)"
+          echo "源文件修改: $MOD_SRC   (期望 7)"
+          echo "（另有 $MOD_SELF 行是补丁文件自身，由解码步骤改写，不计入）"
+
+          if [ "$NEW" != "4" ] || [ "$MOD_SRC" != "7" ]; then
+            echo "::error title=改动数量不符::预期 4 新 + 7 改，实际 $NEW 新 + $MOD_SRC 改"
+            cat /tmp/status.txt
             exit 1
           fi
 
-          echo "=== 中文资源抽查 ==="
-          grep -n "resume_position_title" app/src/main/res/values-zh-rCN/strings.xml || true
+          echo "=== 落地内容抽查 ==="
+          echo -n "recordLocalReadingProgress: "
+          grep -c "fun recordLocalReadingProgress" app/src/main/java/com/bugenzhao/mnga/ui/screens/topicdetails/TopicDetailsScreen.kt || true
+          echo -n "topicPageOfFloor: "
+          grep -c "fun topicPageOfFloor" app/src/main/java/com/bugenzhao/mnga/storage/TopicReadingProgressStorage.kt || true
+          echo -n "中文资源: "
+          grep -c "resume_position_title" app/src/main/res/values-zh-rCN/strings.xml || true
       - name: Run unit tests
         run: ./gradlew testDebugUnitTest --stacktrace
 
