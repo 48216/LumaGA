@@ -240,12 +240,12 @@ jobs:
           MOD_SRC=$(grep -v 'LumaGA-reading-progress\.patch' /tmp/status.txt \
             | grep -cE '^ [MADRC] ' || true)
           MOD_SELF=$(grep -c 'LumaGA-reading-progress\.patch' /tmp/status.txt || true)
-          echo "新文件    : $NEW       (期望 4)"
+          echo "新文件    : $NEW       (期望 3)"
           echo "源文件修改: $MOD_SRC   (期望 7)"
           echo "（另有 $MOD_SELF 行是补丁文件自身，由解码步骤改写，不计入）"
 
-          if [ "$NEW" != "4" ] || [ "$MOD_SRC" != "7" ]; then
-            echo "::error title=改动数量不符::预期 4 新 + 7 改，实际 $NEW 新 + $MOD_SRC 改"
+          if [ "$NEW" != "3" ] || [ "$MOD_SRC" != "7" ]; then
+            echo "::error title=改动数量不符::预期 3 新 + 7 改，实际 $NEW 新 + $MOD_SRC 改"
             cat /tmp/status.txt
             exit 1
           fi
