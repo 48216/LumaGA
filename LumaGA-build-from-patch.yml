@@ -1,0 +1,128 @@
+name: Build from patch
+
+# Builds an APK by applying LumaGA-reading-progress.patch from the repo root.
+#
+# Use this when you cannot run git locally: drop the .patch file in the repo
+# root and run this workflow from the Actions tab. The patch is applied in the
+# runner only and never committed, so a clean clone stays clean.
+#
+# The apply step normalizes line endings first (a Windows upload with
+# core.autocrlf can turn the .patch into CRLF, which `git apply` rejects),
+# falls back through progressively more tolerant apply modes, and prints the
+# real error if everything fails. If the patch is already committed to this
+# branch, it simply skips ahead to the build.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["LumaGA-reading-progress.patch"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Apply patch and build debug APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # The runner image may not carry platform 36 or matching build-tools;
+      # pre-accepting the licenses lets AGP fetch the missing pieces itself.
+      - name: Accept Android SDK licenses
+        run: |
+          mkdir -p "$ANDROID_HOME/licenses"
+          printf "\n24333f8a63b6825ea9c5514f83c2829b004d1fee" > "$ANDROID_HOME/licenses/android-sdk-license"
+
+      - name: Apply patch
+        run: |
+          PATCH="LumaGA-reading-progress.patch"
+          echo "=== 仓库根目录文件 ==="
+          ls -la | head -30
+          echo
+          if [ ! -f "$PATCH" ]; then
+            echo "::error title=缺少补丁文件::$PATCH 不在仓库根目录。请上传到根目录后重新运行。"
+            exit 1
+          fi
+
+          echo "=== 补丁文件属性 ==="
+          ls -l "$PATCH"
+          echo "行数: $(wc -l < "$PATCH")"
+          echo "前 5 行:"
+          head -5 "$PATCH"
+          echo
+
+          echo "=== 是否已经打好补丁 ==="
+          if [ -f app/src/main/java/com/bugenzhao/mnga/storage/TopicReadingProgressStorage.kt ]; then
+            echo "检测到补丁已在该分支上，跳过应用，直接编译。"
+            exit 0
+          fi
+
+          echo "=== 规范化换行符到 LF ==="
+          tr -d '\r' < "$PATCH" > /tmp/normalized.patch
+          echo "规范化后行数: $(wc -l < /tmp/normalized.patch)"
+          echo
+
+          echo "=== 依次尝试应用 ==="
+          if git apply --verbose /tmp/normalized.patch; then
+            echo "应用方式: git apply（标准）"
+          elif git apply --ignore-whitespace --whitespace=nowarn --verbose /tmp/normalized.patch; then
+            echo "应用方式: git apply --ignore-whitespace"
+          elif git apply --3way --verbose /tmp/normalized.patch; then
+            echo "应用方式: git apply --3way"
+          elif patch -p1 --forward --no-backup-if-mismatch < /tmp/normalized.patch; then
+            echo "应用方式: patch -p1"
+          else
+            echo "::error title=补丁应用失败::所有应用方式都失败。请把上面最后一个失败命令的完整输出发给我。"
+            echo "失败时的文件状态："
+            git status --short || true
+            exit 1
+          fi
+
+          echo
+          echo "=== 应用后的改动 ==="
+          git status --short
+
+      # The uploaded gradlew sometimes loses its executable bit (the browser
+      # upload path does not always preserve file modes). Gradle needs it.
+      - name: Make gradlew executable
+        run: |
+          if [ -x gradlew ]; then
+            echo "gradlew 已有可执行位"
+          else
+            echo "gradlew 缺可执行位，本次运行内修正"
+            chmod +x gradlew
+            echo "::warning title=gradlew 缺少可执行位::本次运行已临时修正。要永久生效，请在有 git 的环境执行 git update-index --chmod=+x gradlew 后提交。"
+          fi
+
+      - name: Run unit tests
+        run: ./gradlew testDebugUnitTest --stacktrace
+
+      - name: Assemble debug APK
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      - name: Upload unit test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-report
+          path: app/build/reports/tests/testDebugUnitTest/**
+          if-no-files-found: ignore
